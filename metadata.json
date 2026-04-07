@@ -1,0 +1,5 @@
+{
+  "name": "XpenceX",
+  "description": "A modern cross-platform expense tracker with AI chat, voice commands, and receipt scanning.",
+  "requestFramePermissions": ["camera", "microphone"]
+}

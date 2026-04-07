@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and settings",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique user ID" },
+        "name": { "type": "string", "description": "User's display name" },
+        "email": { "type": "string", "format": "email", "description": "User's email address" },
+        "photoURL": { "type": "string", "description": "User's profile photo URL" },
+        "monthlyBudget": { "type": "number", "description": "Monthly budget limit" },
+        "currency": { "type": "string", "description": "Preferred currency (default BDT)" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "An expense entry",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User ID who owns this expense" },
+        "title": { "type": "string", "description": "Title of the expense" },
+        "amount": { "type": "number", "description": "Amount spent" },
+        "category": { "type": "string", "description": "Category name" },
+        "date": { "type": "string", "format": "date-time", "description": "Date of the expense" },
+        "notes": { "type": "string", "description": "Additional notes" }
+      },
+      "required": ["uid", "title", "amount", "category", "date"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "A custom expense category",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User ID who owns this category" },
+        "name": { "type": "string", "description": "Name of the category" },
+        "icon": { "type": "string", "description": "Icon name from lucide-react" }
+      },
+      "required": ["uid", "name"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "/expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Expense entries"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Custom categories per user"
+    }
+  }
+}

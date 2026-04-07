@@ -1,0 +1,72 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-border: var(--card-border);
+  --color-muted: var(--muted);
+  
+  --color-primary-gradient-start: #4f46e5;
+  --color-primary-gradient-end: #9333ea;
+  
+  --color-success-gradient-start: #10b981;
+  --color-success-gradient-end: #3b82f6;
+  
+  --color-warning-gradient-start: #f59e0b;
+  --color-warning-gradient-end: #ef4444;
+
+  --color-accent-teal: #14b8a6;
+  --color-accent-purple: #a855f7;
+  --color-accent-blue: #3b82f6;
+  --color-accent-green: #22c55e;
+  --color-accent-orange: #f97316;
+  --color-accent-yellow: #eab308;
+}
+
+:root {
+  --background: #FFFFFF;
+  --foreground: #000000;
+  --muted: #555555;
+  --card: #F5F5F5;
+  --card-border: rgba(0, 0, 0, 0.05);
+}
+
+.dark {
+  --background: #121212;
+  --foreground: #FFFFFF;
+  --muted: #A1A1AA;
+  --card: #1E1E1E;
+  --card-border: rgba(255, 255, 255, 0.05);
+}
+
+@layer base {
+  body {
+    @apply antialiased transition-colors duration-300 bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  .bg-glass {
+    @apply bg-card/70 backdrop-blur-lg border border-card-border;
+  }
+  
+  .shadow-soft {
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+  }
+
+  .shadow-vibrant {
+    box-shadow: 0 20px 25px -5px rgba(79, 70, 229, 0.1), 0 8px 10px -6px rgba(79, 70, 229, 0.1);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
