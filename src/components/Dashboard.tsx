@@ -19,35 +19,60 @@ export default function Dashboard() {
   useEffect(() => {
     if (!user) return;
 
-    const q = query(
+    // Recent transactions query (limited)
+    const recentQ = query(
       collection(db, 'expenses'),
       where('uid', '==', user.uid),
       orderBy('date', 'desc'),
       limit(20)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense));
-      setExpenses(docs);
+    const unsubscribeRecent = onSnapshot(recentQ, (snapshot) => {
+      setExpenses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense)));
+    });
 
-      // Calculate summaries
+    // Summary query (unlimited for the current month)
+    const monthStart = startOfMonth(new Date());
+    const summaryQ = query(
+      collection(db, 'expenses'),
+      where('uid', '==', user.uid),
+      where('date', '>=', monthStart.toISOString())
+    );
+
+    const unsubscribeSummary = onSnapshot(summaryQ, (snapshot) => {
+      const allMonthDocs = snapshot.docs.map(doc => doc.data() as Expense);
+      
       const now = new Date();
       const todayStart = new Date().setHours(0, 0, 0, 0);
       const weekStart = startOfWeek(now).getTime();
-      const monthStart = startOfMonth(now).getTime();
 
       let today = 0, week = 0, month = 0;
-      docs.forEach(exp => {
+      
+      allMonthDocs.forEach(exp => {
+        const amount = Number(exp.amount) || 0;
         const expDate = new Date(exp.date).getTime();
-        if (expDate >= todayStart) today += exp.amount;
-        if (expDate >= weekStart) week += exp.amount;
-        if (expDate >= monthStart) month += exp.amount;
+        
+        // Month total
+        month = Math.round((month + amount) * 100) / 100;
+        
+        // Week total
+        if (expDate >= weekStart) {
+          week = Math.round((week + amount) * 100) / 100;
+        }
+        
+        // Today total
+        if (expDate >= todayStart) {
+          today = Math.round((today + amount) * 100) / 100;
+        }
       });
 
       setSummary({ today, week, month });
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribeRecent();
+      unsubscribeSummary();
+    };
   }, [user]);
 
   const budget = profile?.monthlyBudget || 0;
@@ -56,10 +81,11 @@ export default function Dashboard() {
 
   const chartData = expenses.reduce((acc: any[], exp) => {
     const existing = acc.find(item => item.name === exp.category);
+    const amount = Number(exp.amount) || 0;
     if (existing) {
-      existing.value += exp.amount;
+      existing.value = Math.round((existing.value + amount) * 100) / 100;
     } else {
-      acc.push({ name: exp.category, value: exp.amount });
+      acc.push({ name: exp.category, value: amount });
     }
     return acc;
   }, []).slice(0, 5);

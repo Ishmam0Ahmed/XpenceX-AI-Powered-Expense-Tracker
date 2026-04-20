@@ -5,8 +5,8 @@
 
 import { useState, useEffect, createContext, useContext } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { auth, db } from './firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, db, testConnection } from './firebase';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { UserProfile } from './types';
 import Auth from './components/Auth';
 import Layout from './components/Layout';
@@ -17,6 +17,7 @@ import Reports from './components/Reports';
 import AIChat from './components/AIChat';
 import Profile from './components/Profile';
 import { motion, AnimatePresence } from 'motion/react';
+import { scheduleDailyReminder } from './services/notificationService';
 
 const lightTheme = {
   background: '#FFFFFF',
@@ -57,6 +58,7 @@ export default function App() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('home');
+  const [isFirestoreAvailable, setIsFirestoreAvailable] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('darkMode');
     if (saved !== null) return JSON.parse(saved);
@@ -76,40 +78,73 @@ export default function App() {
 
   const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
 
-  const fetchProfile = async (uid: string) => {
-    const docRef = doc(db, 'users', uid);
-    const docSnap = await getDoc(docRef);
-    if (docSnap.exists()) {
-      setProfile(docSnap.data() as UserProfile);
-    } else {
-      // Create default profile
-      const newProfile: UserProfile = {
-        uid,
-        email: auth.currentUser?.email || '',
-        name: auth.currentUser?.displayName || '',
-        currency: 'BDT',
-        monthlyBudget: 5000,
-      };
-      await setDoc(docRef, newProfile);
-      setProfile(newProfile);
-    }
-  };
-
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const checkConnection = () => {
+      testConnection().then(available => setIsFirestoreAvailable(available));
+    };
+
+    checkConnection();
+
+    // Re-check when user tab becomes active (helps if they left it open over midnight)
+    window.addEventListener('focus', checkConnection);
+    return () => window.removeEventListener('focus', checkConnection);
+  }, []);
+  
+  useEffect(() => {
+    let unsubscribeProfile: (() => void) | undefined;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       setUser(user);
       if (user) {
-        await fetchProfile(user.uid);
+        const docRef = doc(db, 'users', user.uid);
+        unsubscribeProfile = onSnapshot(docRef, async (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setProfile({
+              uid: docSnap.id,
+              email: data.email,
+              name: data.name,
+              currency: data.currency,
+              monthlyBudget: data.monthlyBudget,
+              notificationsEnabled: data.notificationsEnabled,
+              ...data
+            } as UserProfile);
+          } else {
+            // Initial profile creation
+            const newProfile: UserProfile = {
+              uid: user.uid,
+              email: user.email || '',
+              name: user.displayName || '',
+              currency: 'BDT',
+              monthlyBudget: 5000,
+              notificationsEnabled: false,
+            };
+            await setDoc(docRef, newProfile);
+            // onSnapshot will trigger again after setDoc
+          }
+          setLoading(false);
+        });
       } else {
         setProfile(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
-    return unsubscribe;
+
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeProfile) unsubscribeProfile();
+    };
   }, []);
 
+  useEffect(() => {
+    if (user && profile?.notificationsEnabled) {
+      scheduleDailyReminder(user.uid, profile.notificationsEnabled);
+    }
+  }, [user, profile?.notificationsEnabled]);
+
   const refreshProfile = async () => {
-    if (user) await fetchProfile(user.uid);
+    // With onSnapshot, manual refresh is no longer strictly necessary
+    // but kept for compatibility with components calling it
   };
 
   if (loading) {
@@ -151,6 +186,22 @@ export default function App() {
         </div>
 
         <div className="relative z-10">
+          {!isFirestoreAvailable && (
+            <motion.div 
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-4 mx-4 bg-rose-500 text-white px-4 py-3 rounded-2xl flex flex-col gap-1 shadow-lg"
+            >
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+                <p className="text-[10px] font-bold uppercase tracking-widest leading-none pt-0.5">Firestore Unavailable</p>
+              </div>
+              <p className="text-[9px] opacity-90 leading-tight">
+                Please check your Internet connection or Firebase configuration. If you've been using the app heavily, you may have reached the Spark plan quota (resets daily). 
+                Check pricing details at <a href="https://firebase.google.com/pricing#cloud-firestore" target="_blank" className="underline">firebase.google.com/pricing</a>
+              </p>
+            </motion.div>
+          )}
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}

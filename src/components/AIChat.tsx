@@ -4,11 +4,13 @@ import { collection, addDoc, query, where, onSnapshot } from 'firebase/firestore
 import { useAuth } from '../App';
 import { ChatMessage, Category, Expense } from '../types';
 import { processInput, processAudioInput, scanReceipt } from '../services/geminiService';
+import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { Mic, Send, Camera, Image as ImageIcon, X, Check, Edit2, Loader2, Bot, User, MessageSquare } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { format } from 'date-fns';
+import { format, startOfMonth, endOfMonth } from 'date-fns';
 import { DEFAULT_CATEGORIES, MAJOR_CURRENCIES } from '../constants';
+import BudgetWarningModal from './BudgetWarningModal';
 
 export default function AIChat() {
   const { user, profile } = useAuth();
@@ -16,14 +18,44 @@ export default function AIChat() {
   const [input, setInput] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isConfirming, setIsConfirming] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
   const [pendingExpense, setPendingExpense] = useState<Partial<Expense> | null>(null);
+  const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
+  const [showBudgetWarning, setShowBudgetWarning] = useState(false);
+  const [monthlyTotal, setMonthlyTotal] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
   const currencySymbol = MAJOR_CURRENCIES.find(c => c.code === profile?.currency)?.symbol || '৳';
+  const budget = profile?.monthlyBudget || 5000;
+
+  useEffect(() => {
+    if (!user) return;
+    
+    // Fetch current month's total for budget check
+    const start = startOfMonth(new Date());
+    const end = endOfMonth(new Date());
+    
+    const q = query(
+      collection(db, 'expenses'),
+      where('uid', '==', user.uid),
+      where('date', '>=', start.toISOString()),
+      where('date', '<=', end.toISOString())
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const total = snapshot.docs.reduce((sum, doc) => {
+        const amt = Number(doc.data().amount) || 0;
+        return Math.round((sum + amt) * 100) / 100;
+      }, 0);
+      setMonthlyTotal(total);
+    });
+
+    return unsubscribe;
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -42,8 +74,9 @@ export default function AIChat() {
   }, [messages]);
 
   const addMessage = (role: 'user' | 'assistant', content: string, type: ChatMessage['type'] = 'text', pending?: Partial<Expense>) => {
+    const id = Math.random().toString(36).substr(2, 9);
     const newMessage: ChatMessage = {
-      id: Math.random().toString(36).substr(2, 9),
+      id,
       role,
       content,
       timestamp: Date.now(),
@@ -51,6 +84,7 @@ export default function AIChat() {
       pendingExpense: pending
     };
     setMessages(prev => [...prev, newMessage]);
+    return id;
   };
 
   const handleSend = async (text: string = input) => {
@@ -68,8 +102,9 @@ export default function AIChat() {
         if (result.expense.category === 'INVALID') {
           addMessage('assistant', "This category does not exist. Please add it manually first.", 'error');
         } else {
-          addMessage('assistant', `I've prepared an expense entry for you. Please confirm the details:`, 'expense_confirmation', result.expense);
+          const msgId = addMessage('assistant', `I've prepared an expense entry for you. Please confirm the details:`, 'expense_confirmation', result.expense);
           setPendingExpense(result.expense);
+          setPendingMessageId(msgId || null);
         }
       } else {
         addMessage('assistant', result.content);
@@ -108,8 +143,9 @@ export default function AIChat() {
               if (result.expense.category === 'INVALID') {
                 addMessage('assistant', "This category does not exist. Please add it manually first.", 'error');
               } else {
-                addMessage('assistant', `I've prepared an expense entry from your voice. Please confirm:`, 'expense_confirmation', result.expense);
+                const msgId = addMessage('assistant', `I've prepared an expense entry from your voice. Please confirm:`, 'expense_confirmation', result.expense);
                 setPendingExpense(result.expense);
+                setPendingMessageId(msgId || null);
               }
             } else {
               addMessage('assistant', result.content);
@@ -159,8 +195,9 @@ export default function AIChat() {
       const base64 = event.target?.result as string;
       const result = await scanReceipt(base64, categories);
       if (result) {
-        addMessage('assistant', "I've extracted the following details from your receipt:", 'expense_confirmation', result);
+        const msgId = addMessage('assistant', `I've analyzed the ${result.notes?.includes('Handwritten') ? 'handwritten note' : 'receipt'}. Here's what I detected:`, 'expense_confirmation', result);
         setPendingExpense(result);
+        setPendingMessageId(msgId || null);
       } else {
         addMessage('assistant', "I couldn't read the receipt clearly. Please try again or enter manually.", 'error');
       }
@@ -169,22 +206,47 @@ export default function AIChat() {
     reader.readAsDataURL(file);
   };
 
-  const confirmExpense = async (expense: Partial<Expense>) => {
-    if (!user) return;
+  const confirmExpense = async (expense: Partial<Expense>, messageId?: string) => {
+    if (!user || isConfirming) return;
+    
+    // Budget Check (Initial trigger)
+    if (monthlyTotal + (expense.amount || 0) > budget && !showBudgetWarning) {
+      if (messageId) setPendingMessageId(messageId);
+      setPendingExpense(expense);
+      setShowBudgetWarning(true);
+      return;
+    }
+
+    setIsConfirming(true);
     try {
+      const confirmedAmount = Number(Number(expense.amount).toFixed(2));
+      
       await addDoc(collection(db, 'expenses'), {
         uid: user.uid,
         title: expense.title,
-        amount: expense.amount,
+        amount: confirmedAmount,
         category: expense.category,
         date: expense.date || new Date().toISOString(),
         notes: expense.notes || '',
         createdAt: new Date().toISOString(),
       });
+
+      // Update the specific message to remove the confirmation UI
+      if (messageId) {
+        setMessages(prev => prev.map(msg => 
+          msg.id === messageId 
+            ? { ...msg, type: 'text', pendingExpense: undefined } 
+            : msg
+        ));
+      }
+
       addMessage('assistant', `✅ Expense saved: **${expense.title}** for **${currencySymbol}${expense.amount}**.`);
       setPendingExpense(null);
+      setPendingMessageId(null);
     } catch (error) {
       addMessage('assistant', "Failed to save expense. Please try again.", 'error');
+    } finally {
+      setIsConfirming(false);
     }
   };
 
@@ -287,14 +349,28 @@ export default function AIChat() {
                     
                     <div className="flex gap-3 pt-2">
                       <button
-                        onClick={() => confirmExpense(msg.pendingExpense!)}
-                        className="flex-1 py-3 bg-indigo-600 text-white rounded-2xl text-sm font-bold shadow-vibrant hover:bg-indigo-700 transition-all flex items-center justify-center gap-2"
+                        onClick={() => confirmExpense(msg.pendingExpense!, msg.id)}
+                        disabled={isConfirming}
+                        className="flex-1 py-3 bg-indigo-600 text-white rounded-2xl text-sm font-bold shadow-vibrant hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:shadow-none"
                       >
-                        Confirm
+                        {isConfirming ? (
+                          <>
+                            <Loader2 size={16} className="animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          'Confirm'
+                        )}
                       </button>
                       <button
-                        onClick={() => addMessage('assistant', "Okay, let's try again. What was the expense?")}
-                        className="flex-1 py-3 bg-slate-100 dark:bg-slate-700 text-muted rounded-2xl text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-600 transition-all"
+                        onClick={() => {
+                          setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, type: 'text', pendingExpense: undefined } : m));
+                          setPendingExpense(null);
+                          setPendingMessageId(null);
+                          addMessage('assistant', "Okay, let's try again. What was the expense?");
+                        }}
+                        disabled={isConfirming}
+                        className="flex-1 py-3 bg-slate-100 dark:bg-slate-700 text-muted rounded-2xl text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-600 transition-all disabled:opacity-50"
                       >
                         Edit
                       </button>
@@ -315,15 +391,15 @@ export default function AIChat() {
         )}
       </div>
 
-      <div className="p-5 bg-card/80 backdrop-blur-md border-t border-card-border">
-        <div className="flex items-center gap-2 bg-background/50 p-2 rounded-[2rem] border border-transparent focus-within:border-indigo-600/30 focus-within:bg-card transition-all shadow-inner">
+      <div className="px-4 py-3 bg-card/80 backdrop-blur-md border-t border-card-border">
+        <div className="flex items-center gap-2 bg-background/50 p-1.5 rounded-[2rem] border border-transparent focus-within:border-indigo-600/30 focus-within:bg-card transition-all shadow-inner max-w-full overflow-hidden">
           <motion.button
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
             onClick={() => fileInputRef.current?.click()}
-            className="p-3 text-slate-400 hover:text-indigo-600 transition-colors"
+            className="flex-shrink-0 w-10 h-10 flex items-center justify-center text-slate-400 hover:text-indigo-600 transition-colors"
           >
-            <Camera size={22} />
+            <Camera size={20} />
           </motion.button>
           <input
             type="file"
@@ -335,7 +411,7 @@ export default function AIChat() {
           <input
             type="text"
             placeholder="Ask me anything..."
-            className="flex-1 bg-transparent border-none focus:ring-0 outline-none text-sm py-2 text-foreground font-medium"
+            className="flex-1 bg-transparent border-none focus:ring-0 outline-none text-sm py-2 text-foreground font-medium min-w-0"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleSend()}
@@ -344,21 +420,40 @@ export default function AIChat() {
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
             onClick={handleVoiceInput}
-            className={`p-3 rounded-full transition-all ${isRecording ? 'bg-rose-500 text-white shadow-lg animate-pulse' : 'text-slate-400 hover:text-indigo-600'}`}
+            className={cn(
+              "flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-all",
+              isRecording ? 'bg-rose-500 text-white shadow-lg animate-pulse' : 'text-slate-400 hover:text-indigo-600'
+            )}
           >
-            <Mic size={22} />
+            <Mic size={20} />
           </motion.button>
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={() => handleSend()}
             disabled={!input.trim() || loading}
-            className="p-3 bg-indigo-600 text-white rounded-2xl shadow-vibrant disabled:opacity-50 disabled:shadow-none transition-all"
+            className="flex-shrink-0 w-10 h-10 bg-indigo-600 text-white rounded-xl shadow-vibrant disabled:opacity-50 disabled:shadow-none transition-all flex items-center justify-center"
           >
-            <Send size={20} />
+            <Send size={18} />
           </motion.button>
         </div>
       </div>
+
+      <BudgetWarningModal
+        isOpen={showBudgetWarning}
+        onConfirm={() => {
+          setShowBudgetWarning(false);
+          if (pendingExpense) confirmExpense(pendingExpense, pendingMessageId || undefined);
+        }}
+        onCancel={() => {
+          setShowBudgetWarning(false);
+          setPendingMessageId(null);
+        }}
+        budget={budget}
+        currentTotal={monthlyTotal}
+        newExpenseAmount={pendingExpense?.amount || 0}
+        currency={currencySymbol}
+      />
     </div>
   );
 }

@@ -131,5 +131,10 @@ service cloud.firestore {
       allow update: if isDocOwner() && isValidCategory(request.resource.data) && uidNotModified();
       allow delete: if isDocOwner() || isAdmin();
     }
+
+    // Support for connectivity checks
+    match /test/{docId} {
+      allow read: if true;
+    }
   }
 }

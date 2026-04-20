@@ -5,6 +5,7 @@ export interface UserProfile {
   photoURL?: string;
   monthlyBudget?: number;
   currency?: string;
+  notificationsEnabled?: boolean;
 }
 
 export interface Expense {

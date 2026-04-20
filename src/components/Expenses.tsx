@@ -4,7 +4,7 @@ import { collection, query, where, orderBy, onSnapshot, deleteDoc, doc } from 'f
 import { useAuth } from '../App';
 import { Expense } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trash2, Edit2, Search, Filter, Calendar, ChevronRight, Tag } from 'lucide-react';
+import { Trash2, Edit2, Search, Filter, Calendar, ChevronRight, Tag, Loader2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { MAJOR_CURRENCIES, DEFAULT_CATEGORIES } from '../constants';
 
@@ -13,6 +13,8 @@ export default function Expenses() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState('All');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const currencySymbol = MAJOR_CURRENCIES.find(c => c.code === profile?.currency)?.symbol || '৳';
 
@@ -33,8 +35,15 @@ export default function Expenses() {
   }, [user]);
 
   const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this expense?')) {
+    try {
+      setIsDeleting(true);
       await deleteDoc(doc(db, 'expenses', id));
+      setDeletingId(null);
+    } catch (error) {
+      console.error("Error deleting expense:", error);
+      alert("Failed to delete. Please try again.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -91,6 +100,47 @@ export default function Expenses() {
 
       {/* List */}
       <div className="space-y-4">
+        <AnimatePresence>
+          {deletingId && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6"
+            >
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                className="bg-card w-full max-w-xs p-6 rounded-[2.5rem] border border-card-border shadow-2xl text-center space-y-6"
+              >
+                <div className="w-16 h-16 bg-rose-50 dark:bg-rose-500/10 rounded-2xl flex items-center justify-center mx-auto text-rose-500">
+                  <Trash2 size={32} />
+                </div>
+                <div className="space-y-2">
+                  <h3 className="font-bold text-xl text-foreground">Delete Expense?</h3>
+                  <p className="text-sm text-muted">Are you sure you want to remove this transaction? This action cannot be undone.</p>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setDeletingId(null)}
+                    disabled={isDeleting}
+                    className="flex-1 py-3 bg-slate-100 dark:bg-slate-800 text-muted rounded-2xl text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleDelete(deletingId)}
+                    disabled={isDeleting}
+                    className="flex-1 py-3 bg-rose-500 text-white rounded-2xl text-sm font-bold shadow-lg shadow-rose-500/30 hover:bg-rose-600 transition-all flex items-center justify-center disabled:opacity-50"
+                  >
+                    {isDeleting ? <Loader2 className="animate-spin" size={18} /> : 'Delete'}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <AnimatePresence mode="popLayout">
           {filteredExpenses.map((exp, index) => {
             const categoryConfig = DEFAULT_CATEGORIES.find(c => c.name === exp.category);
@@ -125,17 +175,17 @@ export default function Expenses() {
                       </div>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="font-bold text-foreground text-lg">-{currencySymbol}{exp.amount.toLocaleString()}</p>
-                    <div className="flex items-center justify-end gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
-                      <button
-                        onClick={() => handleDelete(exp.id)}
-                        className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-xl transition-colors"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                    <div className="text-right">
+                      <p className="font-bold text-foreground text-lg">-{currencySymbol}{exp.amount.toLocaleString()}</p>
+                      <div className="flex items-center justify-end gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
+                        <button
+                          onClick={() => setDeletingId(exp.id)}
+                          className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-xl transition-colors"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </div>
-                  </div>
                 </div>
                 {exp.notes && (
                   <div className="relative z-10 mt-4 px-4 py-3 bg-slate-50/50 dark:bg-slate-800/30 rounded-2xl border border-slate-100 dark:border-slate-700/50">

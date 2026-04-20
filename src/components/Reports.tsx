@@ -30,16 +30,20 @@ export default function Reports() {
     const monthStr = format(month, 'MMM');
     const total = expenses
       .filter(exp => format(new Date(exp.date), 'MMM yyyy') === format(month, 'MMM yyyy'))
-      .reduce((sum, exp) => sum + exp.amount, 0);
+      .reduce((sum, exp) => {
+        const amt = Number(exp.amount) || 0;
+        return Math.round((sum + amt) * 100) / 100;
+      }, 0);
     return { name: monthStr, total };
   });
 
   const categoryData = expenses.reduce((acc: any[], exp) => {
     const existing = acc.find(item => item.name === exp.category);
+    const amount = Number(exp.amount) || 0;
     if (existing) {
-      existing.value += exp.amount;
+      existing.value = Math.round((existing.value + amount) * 100) / 100;
     } else {
-      acc.push({ name: exp.category, value: exp.amount });
+      acc.push({ name: exp.category, value: amount });
     }
     return acc;
   }, []).sort((a, b) => b.value - a.value);

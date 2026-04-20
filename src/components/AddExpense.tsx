@@ -1,12 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { db } from '../firebase';
 import { collection, addDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { useAuth } from '../App';
 import { Category } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
-import { Wallet, Tag, Calendar, FileText, Check, ArrowLeft, Edit2, Loader2 } from 'lucide-react';
-import { format } from 'date-fns';
+import { Wallet, Tag, Calendar, FileText, Check, ArrowLeft, Edit2, Loader2, Camera, AlertCircle, ScanText, X } from 'lucide-react';
+import { format, startOfMonth, endOfMonth } from 'date-fns';
 import { DEFAULT_CATEGORIES, MAJOR_CURRENCIES } from '../constants';
+import BudgetWarningModal from './BudgetWarningModal';
+import { scanReceipt } from '../services/geminiService';
 
 interface AddExpenseProps {
   onComplete: () => void;
@@ -21,13 +23,40 @@ export default function AddExpense({ onComplete }: AddExpenseProps) {
   const [notes, setNotes] = useState('');
   const [categories, setCategories] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [showBudgetWarning, setShowBudgetWarning] = useState(false);
+  const [monthlyTotal, setMonthlyTotal] = useState(0);
+  const [isScanning, setIsScanning] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const currencySymbol = MAJOR_CURRENCIES.find(c => c.code === profile?.currency)?.symbol || '৳';
+  const budget = profile?.monthlyBudget || 5000;
 
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, 'categories'), where('uid', '==', user.uid));
+    
+    // Fetch current month's total for budget check
+    const start = startOfMonth(new Date());
+    const end = endOfMonth(new Date());
+    
+    const q = query(
+      collection(db, 'expenses'),
+      where('uid', '==', user.uid),
+      where('date', '>=', start.toISOString()),
+      where('date', '<=', end.toISOString())
+    );
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      const total = snapshot.docs.reduce((sum, doc) => sum + doc.data().amount, 0);
+      setMonthlyTotal(total);
+    });
+
+    return unsubscribe;
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const catQ = query(collection(db, 'categories'), where('uid', '==', user.uid));
+    const unsubscribe = onSnapshot(catQ, (snapshot) => {
       const customCats = snapshot.docs.map(doc => ({ 
         id: doc.id, 
         name: doc.data().name,
@@ -41,19 +70,19 @@ export default function AddExpense({ onComplete }: AddExpenseProps) {
     return unsubscribe;
   }, [user]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user || !title || !amount || !category) return;
-
+  const saveExpense = async () => {
     setLoading(true);
     try {
+      const parsedAmount = Number(parseFloat(amount).toFixed(2));
+      if (isNaN(parsedAmount)) throw new Error("Invalid amount");
+      
       await addDoc(collection(db, 'expenses'), {
-        uid: user.uid,
-        title,
-        amount: parseFloat(amount),
+        uid: user!.uid,
+        title: title.trim(),
+        amount: parsedAmount,
         category,
         date: new Date(date).toISOString(),
-        notes,
+        notes: notes.trim(),
         createdAt: new Date().toISOString(),
       });
       onComplete();
@@ -62,6 +91,43 @@ export default function AddExpense({ onComplete }: AddExpenseProps) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !title || !amount || !category) return;
+
+    const newAmount = Number(parseFloat(amount).toFixed(2));
+    if (isNaN(newAmount)) return;
+
+    if (monthlyTotal + newAmount > budget) {
+      setShowBudgetWarning(true);
+      return;
+    }
+
+    await saveExpense();
+  };
+
+  const handleScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    setIsScanning(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64 = event.target?.result as string;
+      const result = await scanReceipt(base64, categories.map(c => c.name));
+      if (result) {
+        setTitle(result.title);
+        setAmount(result.amount.toString());
+        setCategory(result.category);
+        if (result.notes) setNotes(result.notes);
+      } else {
+        alert("Failed to read the receipt. Please try again.");
+      }
+      setIsScanning(false);
+    };
+    reader.readAsDataURL(file);
   };
 
   return (
@@ -76,7 +142,47 @@ export default function AddExpense({ onComplete }: AddExpenseProps) {
           <ArrowLeft size={20} />
         </motion.button>
         <h1 className="text-2xl font-bold text-foreground tracking-tight">Add Expense</h1>
+        
+        <div className="ml-auto flex gap-2">
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            className="hidden" 
+            accept="image/*" 
+            onChange={handleScan}
+          />
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isScanning}
+            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-xl font-bold text-xs uppercase tracking-wider border border-indigo-100 dark:border-indigo-500/20"
+          >
+            {isScanning ? (
+              <Loader2 className="animate-spin" size={16} />
+            ) : (
+              <>
+                <ScanText size={16} />
+                Scan Receipt
+              </>
+            )}
+          </motion.button>
+        </div>
       </header>
+
+      {/* 80% Budget Warning */}
+      {monthlyTotal >= budget * 0.8 && monthlyTotal < budget && (
+        <motion.div 
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 p-4 rounded-3xl flex items-center gap-3 text-amber-700 dark:text-amber-400"
+        >
+          <AlertCircle size={20} className="flex-shrink-0" />
+          <p className="text-xs font-bold leading-tight uppercase tracking-wider">
+            Warning: You've reached {Math.round((monthlyTotal / budget) * 100)}% of your budget!
+          </p>
+        </motion.div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-8">
         <div className="bg-card p-7 rounded-[2.5rem] shadow-soft border border-card-border space-y-6 transition-all">
@@ -194,6 +300,19 @@ export default function AddExpense({ onComplete }: AddExpenseProps) {
           )}
         </motion.button>
       </form>
+
+      <BudgetWarningModal
+        isOpen={showBudgetWarning}
+        onConfirm={() => {
+          setShowBudgetWarning(false);
+          saveExpense();
+        }}
+        onCancel={() => setShowBudgetWarning(false)}
+        budget={budget}
+        currentTotal={monthlyTotal}
+        newExpenseAmount={parseFloat(amount) || 0}
+        currency={currencySymbol}
+      />
     </div>
   );
 }

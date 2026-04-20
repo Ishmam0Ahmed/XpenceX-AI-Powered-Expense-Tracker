@@ -8,13 +8,17 @@ export const auth = getAuth(app);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 // Test connection
-async function testConnection() {
+export async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. ");
+    console.log("Firestore connection test: Success");
+    return true;
+  } catch (error: any) {
+    console.warn("Firestore connection test info:", error.message);
+    if (error?.message?.includes('the client is offline') || error?.message?.includes('unavailable')) {
+      console.error("Please check your Firebase configuration or internet connection. Firestore is currently unavailable.");
     }
+    return false;
   }
 }
 testConnection();

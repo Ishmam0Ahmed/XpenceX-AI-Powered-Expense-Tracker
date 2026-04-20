@@ -5,24 +5,38 @@ import { collection, query, where, onSnapshot, addDoc, deleteDoc, doc, updateDoc
 import { useAuth } from '../App';
 import { Category } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
-import { LogOut, Plus, Trash2, Settings, Wallet, Tag, ChevronRight, User, Mail, Bell, Moon, Sun, Globe } from 'lucide-react';
+import { LogOut, Plus, Trash2, Settings, Wallet, Tag, ChevronRight, User, Mail, Bell, Moon, Sun, Globe, Download, Upload, FileSpreadsheet } from 'lucide-react';
 import { MAJOR_CURRENCIES } from '../constants';
+import { exportToExcel, parseExcelFile } from '../services/excelService';
+import ExcelImportReview from './ExcelImportReview';
 
 export default function Profile() {
   const { user, profile, refreshProfile, isDarkMode, toggleDarkMode } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
+  const [expenses, setExpenses] = useState<any[]>([]);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [budget, setBudget] = useState(profile?.monthlyBudget?.toString() || '5000');
   const [isEditingBudget, setIsEditingBudget] = useState(false);
   const [isEditingCurrency, setIsEditingCurrency] = useState(false);
+  const [importData, setImportData] = useState<any[] | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
 
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, 'categories'), where('uid', '==', user.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const catQ = query(collection(db, 'categories'), where('uid', '==', user.uid));
+    const unsubscribeCats = onSnapshot(catQ, (snapshot) => {
       setCategories(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Category)));
     });
-    return unsubscribe;
+
+    const expQ = query(collection(db, 'expenses'), where('uid', '==', user.uid));
+    const unsubscribeExps = onSnapshot(expQ, (snapshot) => {
+      setExpenses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => {
+      unsubscribeCats();
+      unsubscribeExps();
+    };
   }, [user]);
 
   const handleLogout = () => signOut(auth);
@@ -118,6 +132,95 @@ export default function Profile() {
               className="absolute top-1 left-0 w-4 h-4 bg-white rounded-full shadow-sm"
             />
           </button>
+        </div>
+      </div>
+
+      {/* Notifications Toggle */}
+      <div className="bg-card p-6 rounded-3xl shadow-sm border border-card-border transition-colors">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-amber-50 dark:bg-amber-900/30 rounded-xl flex items-center justify-center text-amber-600 dark:text-amber-400">
+              <Bell size={20} />
+            </div>
+            <div>
+              <p className="font-bold text-foreground">Daily Reminder</p>
+              <p className="text-xs text-muted font-medium">Notify if I forget to log daily</p>
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              if (!user) return;
+              const currentValue = !!profile?.notificationsEnabled;
+              const newValue = !currentValue;
+              
+              if (newValue) {
+                try {
+                  const permission = await Notification.requestPermission();
+                  if (permission !== 'granted') {
+                    console.warn("Notification permission not granted:", permission);
+                  }
+                } catch (err) {
+                  console.error("Notification API error:", err);
+                }
+              }
+
+              try {
+                await updateDoc(doc(db, 'users', user.uid), {
+                  notificationsEnabled: newValue,
+                });
+              } catch (err) {
+                console.error("Error updating profile:", err);
+              }
+            }}
+            className={`w-12 h-6 rounded-full transition-colors relative ${profile?.notificationsEnabled ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-white/5'}`}
+          >
+            <motion.div
+              animate={{ x: profile?.notificationsEnabled ? 24 : 2 }}
+              className="absolute top-1 left-0 w-4 h-4 bg-white rounded-full shadow-sm"
+            />
+          </button>
+        </div>
+      </div>
+
+      {/* Excel Data Management */}
+      <div className="bg-card p-6 rounded-3xl shadow-sm border border-card-border space-y-6 transition-colors">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-50 dark:bg-emerald-900/30 rounded-xl flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+            <FileSpreadsheet size={20} />
+          </div>
+          <h3 className="font-bold text-foreground">Data Management</h3>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            onClick={() => exportToExcel(expenses)}
+            className="p-4 bg-emerald-600 text-white rounded-2xl font-bold flex flex-col items-center gap-2 shadow-lg shadow-emerald-500/20 active:scale-95 transition-all"
+          >
+            <Download size={24} />
+            <span className="text-xs">Export to Excel</span>
+          </button>
+          
+          <label className="p-4 bg-blue-600 text-white rounded-2xl font-bold flex flex-col items-center gap-2 shadow-lg shadow-blue-500/20 active:scale-95 transition-all cursor-pointer">
+            <Upload size={24} />
+            <span className="text-xs">Import from Excel</span>
+            <input 
+              type="file" 
+              accept=".xlsx,.xls" 
+              className="hidden" 
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  try {
+                    const data = await parseExcelFile(file);
+                    setImportData(data);
+                    setIsImporting(true);
+                  } catch (err) {
+                    alert("Failed to parse Excel file. Ensure it has Title, Amount, Category columns.");
+                  }
+                }
+              }}
+            />
+          </label>
         </div>
       </div>
 
@@ -242,9 +345,35 @@ export default function Profile() {
 
       {/* App Info */}
       <div className="text-center py-6">
-        <p className="text-muted text-xs font-bold uppercase tracking-widest">XpenceX v1.0.0</p>
+        <p className="text-muted text-xs font-bold uppercase tracking-widest">XpenceX v1.1.0</p>
         <p className="text-muted text-[10px] mt-1">Made with ❤️ by Ishmam Ahmed</p>
       </div>
+
+      <ExcelImportReview 
+        isOpen={isImporting}
+        data={importData || []}
+        currency={MAJOR_CURRENCIES.find(c => c.code === profile?.currency)?.symbol || '৳'}
+        onCancel={() => {
+          setIsImporting(false);
+          setImportData(null);
+        }}
+        onConfirm={async (finalData) => {
+          if (!user) return;
+          try {
+            const batch = finalData.map(item => addDoc(collection(db, 'expenses'), {
+              ...item,
+              uid: user.uid,
+              createdAt: new Date().toISOString()
+            }));
+            await Promise.all(batch);
+            setIsImporting(false);
+            setImportData(null);
+            alert("Successfully imported " + finalData.length + " transactions!");
+          } catch (err) {
+            alert("Failed to save imported data.");
+          }
+        }}
+      />
     </div>
   );
 }
